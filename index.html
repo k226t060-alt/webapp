@@ -1,0 +1,675 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>スマート家計簿アプリ</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Phosphor Icons (アイコン用) -->
+  <script src="https://unpkg.com/@phosphor-icons/web"></script>
+  <style>
+    /* iOSセーフエリア対応とスクロール非表示設定 */
+    :root {
+      --safe-area-inset-bottom: env(safe-area-inset-bottom);
+    }
+    body {
+      -webkit-tap-highlight-color: transparent;
+      overflow: hidden;
+      background-color: #f3f4f6;
+    }
+    .pb-safe { padding-bottom: max(1rem, var(--safe-area-inset-bottom)); }
+    
+    /* モーダルのアニメーション */
+    .modal-enter { animation: fadeIn 0.2s ease-out forwards; }
+    .modal-leave { animation: fadeOut 0.2s ease-in forwards; }
+    .modal-slide-up { animation: slideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+    .modal-slide-down { animation: slideDown 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+    
+    @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+    @keyframes fadeOut { from { opacity: 1; } to { opacity: 0; } }
+    @keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
+    @keyframes slideDown { from { transform: translateY(0); } to { transform: translateY(100%); } }
+
+    /* スクロールバー非表示（機能は維持） */
+    .no-scrollbar::-webkit-scrollbar { display: none; }
+    .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+  </style>
+</head>
+<body class="flex justify-center h-screen font-sans text-gray-800">
+
+  <!-- メインアプリコンテナ -->
+  <div class="w-full max-w-md bg-white shadow-xl relative flex flex-col h-full overflow-hidden">
+    
+    <!-- ヘッダー -->
+    <header class="bg-indigo-600 text-white p-5 rounded-b-2xl shadow-md z-10 shrink-0">
+      <h1 id="header-title" class="text-lg font-semibold mb-1">ホーム</h1>
+      <div id="header-balance-container">
+        <p class="text-indigo-200 text-sm">総資産残高</p>
+        <p id="total-balance" class="text-3xl font-bold tracking-tight">¥0</p>
+      </div>
+    </header>
+
+    <!-- メインコンテンツ (タブごとに表示切り替え) -->
+    <main class="flex-1 overflow-y-auto p-4 pb-24 no-scrollbar relative" id="main-content">
+      
+      <!-- ホームタブ -->
+      <div id="tab-home" class="space-y-6 block">
+        <!-- アカウント別残高 -->
+        <section>
+          <div class="flex justify-between items-center mb-3 ml-1">
+            <h2 class="text-sm font-bold text-gray-500">アカウント別残高</h2>
+            <div class="text-xs text-indigo-500 bg-indigo-50 px-2 py-1 rounded flex items-center">
+              <i class="ph ph-calendar-blank mr-1"></i>
+              <span id="current-month-display">--</span>月の利用状況
+            </div>
+          </div>
+          <div id="account-list-home" class="space-y-3">
+            <!-- JSで動的に生成 -->
+          </div>
+        </section>
+
+        <!-- 最近の記録 -->
+        <section>
+          <div class="flex justify-between items-end mb-3 ml-1">
+            <h2 class="text-sm font-bold text-gray-500">最近の記録</h2>
+            <button onclick="switchTab('history')" class="text-xs text-indigo-600 font-medium">すべて見る</button>
+          </div>
+          <div class="bg-white border border-gray-100 rounded-xl shadow-sm overflow-hidden">
+            <div id="recent-transactions" class="divide-y divide-gray-50">
+              <!-- JSで動的に生成 -->
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <!-- 履歴タブ -->
+      <div id="tab-history" class="space-y-4 hidden">
+        <div class="bg-white border border-gray-100 rounded-xl shadow-sm overflow-hidden">
+            <div id="all-transactions" class="divide-y divide-gray-50">
+              <!-- JSで動的に生成 -->
+            </div>
+        </div>
+      </div>
+
+      <!-- アカウント管理タブ -->
+      <div id="tab-settings" class="space-y-4 hidden">
+        <p class="text-sm text-gray-500 mb-4">アカウントの追加や、残高・上限額の修正ができます。</p>
+        <div id="account-list-settings" class="space-y-3">
+          <!-- JSで動的に生成 -->
+        </div>
+        <button 
+          onclick="openAccountModal()"
+          class="w-full py-3 mt-4 border-2 border-dashed border-gray-300 text-gray-500 rounded-xl font-medium hover:bg-gray-50 transition-colors flex items-center justify-center space-x-2"
+        >
+          <i class="ph ph-plus font-bold"></i>
+          <span>アカウントを追加する</span>
+        </button>
+      </div>
+    </main>
+
+    <!-- FAB (＋ボタン) -->
+    <button
+      id="fab-button"
+      onclick="openTxModal()"
+      class="absolute bottom-20 right-6 bg-indigo-600 hover:bg-indigo-700 text-white p-4 rounded-full shadow-lg shadow-indigo-200 transition-transform active:scale-95 z-20"
+    >
+      <i class="ph ph-plus text-2xl font-bold"></i>
+    </button>
+
+    <!-- ボトムナビゲーション -->
+    <nav class="absolute bottom-0 w-full bg-white border-t border-gray-100 flex justify-around pb-safe pt-2 px-2 z-10 text-xs text-gray-500 shrink-0">
+      <button onclick="switchTab('home')" id="nav-home" class="flex flex-col items-center p-2 w-full text-indigo-600">
+        <i class="ph-fill ph-house text-2xl mb-1"></i>
+        ホーム
+      </button>
+      <button onclick="switchTab('history')" id="nav-history" class="flex flex-col items-center p-2 w-full hover:text-gray-800">
+        <i class="ph ph-list text-2xl mb-1"></i>
+        履歴
+      </button>
+      <button onclick="switchTab('settings')" id="nav-settings" class="flex flex-col items-center p-2 w-full hover:text-gray-800">
+        <i class="ph ph-gear text-2xl mb-1"></i>
+        アカウント
+      </button>
+    </nav>
+
+    <!-- 取引追加モーダル -->
+    <div id="tx-modal" class="absolute inset-0 z-30 hidden">
+      <div class="absolute inset-0 bg-black/40 modal-enter" onclick="closeTxModal()"></div>
+      <div class="absolute bottom-0 w-full bg-white rounded-t-2xl shadow-2xl flex flex-col modal-slide-up h-[90%]">
+        
+        <div class="flex justify-between items-center p-4 border-b border-gray-100 shrink-0">
+          <h2 class="text-lg font-bold text-gray-800">記録を追加</h2>
+          <button onclick="closeTxModal()" class="p-2 text-gray-400 hover:bg-gray-100 rounded-full">
+            <i class="ph ph-x text-xl font-bold"></i>
+          </button>
+        </div>
+
+        <div class="overflow-y-auto flex-1 p-5">
+          <!-- 収支トグル -->
+          <div class="flex p-1 bg-gray-100 rounded-xl mb-6 relative">
+            <button onclick="setTxType('expense')" id="tx-type-expense" class="flex-1 py-2 text-sm font-medium rounded-lg flex items-center justify-center space-x-1 bg-white text-red-600 shadow-sm transition-all z-10">
+              <i class="ph-fill ph-arrow-circle-down text-lg"></i><span>支出</span>
+            </button>
+            <button onclick="setTxType('income')" id="tx-type-income" class="flex-1 py-2 text-sm font-medium rounded-lg flex items-center justify-center space-x-1 text-gray-500 transition-all z-10">
+              <i class="ph-fill ph-arrow-circle-up text-lg"></i><span>収入</span>
+            </button>
+          </div>
+
+          <form id="tx-form" onsubmit="saveTransaction(event)" class="space-y-5">
+            <div>
+              <label class="block text-xs font-semibold text-gray-500 mb-1">金額</label>
+              <div class="relative">
+                <span class="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 font-bold">¥</span>
+                <input type="number" id="tx-amount" required class="w-full pl-10 pr-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white text-xl font-bold text-gray-800" placeholder="0" pattern="\d*">
+              </div>
+            </div>
+
+            <div id="tx-account-container">
+              <label class="block text-xs font-semibold text-gray-500 mb-1">アカウント</label>
+              <select id="tx-account" class="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white text-gray-800">
+                <!-- JSで生成 -->
+              </select>
+            </div>
+
+            <div>
+              <label class="block text-xs font-semibold text-gray-500 mb-1">カテゴリー</label>
+              <div id="tx-categories" class="grid grid-cols-4 gap-2">
+                <!-- JSで生成 -->
+              </div>
+            </div>
+
+            <div>
+              <label class="block text-xs font-semibold text-gray-500 mb-1">日付</label>
+              <input type="date" id="tx-date" required class="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white text-gray-800">
+            </div>
+
+            <div>
+              <label class="block text-xs font-semibold text-gray-500 mb-1">メモ（任意）</label>
+              <input type="text" id="tx-note" class="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white text-gray-800" placeholder="例: スーパーでの買い物">
+            </div>
+          </form>
+        </div>
+
+        <div class="p-4 border-t border-gray-100 bg-white pb-safe shrink-0">
+          <button type="submit" form="tx-form" class="w-full py-4 bg-indigo-600 text-white rounded-xl font-bold text-lg hover:bg-indigo-700 active:scale-[0.98] transition-transform shadow-lg shadow-indigo-200">
+            保存する
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- アカウント追加・編集モーダル -->
+    <div id="acc-modal" class="absolute inset-0 z-30 hidden">
+      <div class="absolute inset-0 bg-black/40 modal-enter" onclick="closeAccountModal()"></div>
+      <div class="absolute bottom-0 w-full bg-white rounded-t-2xl shadow-2xl flex flex-col modal-slide-up">
+        
+        <div class="flex justify-between items-center p-4 border-b border-gray-100">
+          <h2 id="acc-modal-title" class="text-lg font-bold text-gray-800">アカウントを追加</h2>
+          <button onclick="closeAccountModal()" class="p-2 text-gray-400 hover:bg-gray-100 rounded-full">
+            <i class="ph ph-x text-xl font-bold"></i>
+          </button>
+        </div>
+
+        <div class="p-5">
+          <form id="acc-form" onsubmit="saveAccount(event)" class="space-y-5">
+            <input type="hidden" id="acc-id"> <!-- 編集用ID -->
+            
+            <div>
+              <label class="block text-xs font-semibold text-gray-500 mb-1">アカウント名</label>
+              <input type="text" id="acc-name" required class="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white text-gray-800" placeholder="例: サブのお財布">
+            </div>
+
+            <div>
+              <label class="block text-xs font-semibold text-gray-500 mb-2">種類</label>
+              <div class="grid grid-cols-3 gap-2">
+                <button type="button" onclick="setAccType('wallet')" id="acc-type-wallet" class="flex flex-col items-center justify-center p-3 rounded-xl border border-orange-500 bg-orange-50 text-orange-600 transition-all">
+                  <i class="ph-fill ph-wallet text-2xl mb-1"></i><span class="text-[10px] font-medium">現金</span>
+                </button>
+                <button type="button" onclick="setAccType('creditCard')" id="acc-type-creditCard" class="flex flex-col items-center justify-center p-3 rounded-xl border border-gray-200 bg-white text-gray-500 transition-all">
+                  <i class="ph-fill ph-credit-card text-2xl mb-1"></i><span class="text-[10px] font-medium">カード</span>
+                </button>
+                <button type="button" onclick="setAccType('bank')" id="acc-type-bank" class="flex flex-col items-center justify-center p-3 rounded-xl border border-gray-200 bg-white text-gray-500 transition-all">
+                  <i class="ph-fill ph-bank text-2xl mb-1"></i><span class="text-[10px] font-medium">銀行口座</span>
+                </button>
+              </div>
+            </div>
+
+            <div>
+              <label id="acc-amount-label" class="block text-xs font-semibold text-gray-500 mb-1">現在の残高（初期残高）</label>
+              <div class="relative">
+                <span class="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 font-bold">¥</span>
+                <input type="number" id="acc-amount" class="w-full pl-10 pr-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white font-bold text-gray-800" placeholder="0" pattern="\d*">
+              </div>
+              <p id="acc-amount-note" class="text-[10px] text-gray-500 mt-1 hidden">※設定した上限額は毎月1日にリセット（復活）します。</p>
+            </div>
+          </form>
+        </div>
+
+        <div class="p-4 border-t border-gray-100 bg-white pb-safe">
+          <button type="submit" form="acc-form" id="acc-submit-btn" class="w-full py-4 bg-indigo-600 text-white rounded-xl font-bold text-lg hover:bg-indigo-700 active:scale-[0.98] transition-transform shadow-lg shadow-indigo-200">
+            追加する
+          </button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <script>
+    // --- データ構造と初期設定 ---
+    
+    // アプリの状態
+    let state = {
+      accounts: [
+        { id: '1', name: 'お財布 (現金)', type: 'wallet', initialBalance: 15000 },
+        { id: '2', name: 'メインカード', type: 'creditCard', limitAmount: 300000 },
+        { id: '3', name: '〇〇銀行', type: 'bank', initialBalance: 100000 },
+      ],
+      transactions: [],
+      currentTab: 'home',
+      txForm: {
+        type: 'expense',
+        categoryId: 'e1'
+      },
+      accForm: {
+        type: 'wallet'
+      }
+    };
+
+    // マスターデータ
+    const CATEGORIES = {
+      expense: [
+        { id: 'e1', name: '食費', icon: '🍽️' },
+        { id: 'e2', name: '日用品', icon: '🧴' },
+        { id: 'e3', name: '交通費', icon: '🚃' },
+        { id: 'e4', name: '交際費', icon: '🍻' },
+        { id: 'e5', name: 'エンタメ', icon: '🎬' },
+        { id: 'e6', name: 'その他', icon: '📦' },
+      ],
+      income: [
+        { id: 'i1', name: '給与', icon: '💼' },
+        { id: 'i2', name: 'お小遣い', icon: '💰' },
+        { id: 'i3', name: '立替返金', icon: '🔄' },
+        { id: 'i4', name: 'その他', icon: '🎉' },
+      ]
+    };
+
+    // ユーティリティ関数
+    const formatCurrency = (amount) => new Intl.NumberFormat('ja-JP', { style: 'currency', currency: 'JPY' }).format(amount);
+    const getMonthPrefix = () => new Date().toISOString().slice(0, 7); // YYYY-MM
+    const getCurrentMonth = () => new Date().getMonth() + 1;
+    
+    // アイコン取得ヘルパー
+    const getAccountIconHTML = (type, classes = "text-2xl") => {
+      switch (type) {
+        case 'wallet': return `<i class="ph-fill ph-wallet ${classes}"></i>`;
+        case 'creditCard': return `<i class="ph-fill ph-credit-card ${classes}"></i>`;
+        case 'bank': return `<i class="ph-fill ph-bank ${classes}"></i>`;
+        default: return `<i class="ph-fill ph-piggy-bank ${classes}"></i>`;
+      }
+    };
+
+    // 初期化処理
+    function init() {
+      // 日付の初期値を今日に設定
+      document.getElementById('tx-date').value = new Date().toISOString().split('T')[0];
+      document.getElementById('current-month-display').innerText = getCurrentMonth();
+      
+      renderApp();
+    }
+
+    // --- レンダリング (UI更新) ---
+
+    function renderApp() {
+      // 1. 計算
+      const monthPrefix = getMonthPrefix();
+      let accountStats = {};
+      
+      // 初期化
+      state.accounts.forEach(acc => {
+        if (acc.type === 'creditCard') {
+          accountStats[acc.id] = { type: 'creditCard', limitAmount: acc.limitAmount || 0, usedThisMonth: 0, name: acc.name };
+        } else {
+          accountStats[acc.id] = { type: acc.type, balance: acc.initialBalance || 0, name: acc.name };
+        }
+      });
+
+      // トランザクションを反映
+      state.transactions.forEach(tx => {
+        const stat = accountStats[tx.accountId];
+        if (!stat) return;
+
+        if (stat.type === 'creditCard') {
+          if (tx.date.startsWith(monthPrefix)) {
+            stat.usedThisMonth += tx.type === 'expense' ? tx.amount : -tx.amount;
+          }
+        } else {
+          stat.balance += tx.type === 'income' ? tx.amount : -tx.amount;
+        }
+      });
+
+      // 総資産計算
+      let total = 0;
+      Object.values(accountStats).forEach(stat => {
+        total += stat.type === 'creditCard' ? -stat.usedThisMonth : stat.balance;
+      });
+      document.getElementById('total-balance').innerText = formatCurrency(total);
+
+      // 2. ホーム画面のアカウント一覧描画
+      const accListHome = document.getElementById('account-list-home');
+      accListHome.innerHTML = '';
+      state.accounts.forEach(acc => {
+        const stat = accountStats[acc.id];
+        let html = '';
+        
+        if (acc.type === 'creditCard') {
+          const available = stat.limitAmount - stat.usedThisMonth;
+          const usagePercent = Math.min(100, Math.max(0, (stat.usedThisMonth / stat.limitAmount) * 100)) || 0;
+          const barColor = usagePercent > 80 ? 'bg-red-500' : 'bg-blue-500';
+          
+          html = `
+            <div class="bg-white p-4 rounded-xl flex flex-col border border-gray-200 shadow-sm">
+              <div class="flex items-center justify-between mb-2">
+                <div class="flex items-center space-x-3">
+                  <div class="p-2 rounded-lg bg-blue-100 text-blue-600 flex items-center justify-center w-10 h-10">
+                    ${getAccountIconHTML(acc.type, "text-xl")}
+                  </div>
+                  <span class="font-medium text-gray-800">${acc.name}</span>
+                </div>
+                <div class="text-right">
+                  <div class="text-[10px] text-gray-400 font-medium">利用可能枠</div>
+                  <span class="font-semibold ${available < 0 ? 'text-red-500' : 'text-gray-900'}">${formatCurrency(available)}</span>
+                </div>
+              </div>
+              <div class="w-full bg-gray-100 rounded-full h-1.5 mt-2 overflow-hidden">
+                <div class="h-1.5 rounded-full transition-all duration-500 ${barColor}" style="width: ${usagePercent}%"></div>
+              </div>
+              <div class="text-[10px] text-gray-500 mt-1.5 text-right flex justify-between">
+                <span>${getCurrentMonth()}月利用分</span>
+                <span>${formatCurrency(stat.usedThisMonth)} / 上限 ${formatCurrency(stat.limitAmount)}</span>
+              </div>
+            </div>`;
+        } else {
+          const colors = acc.type === 'wallet' ? 'bg-orange-100 text-orange-600' : 'bg-emerald-100 text-emerald-600';
+          html = `
+            <div class="bg-white p-4 rounded-xl flex items-center justify-between border border-gray-200 shadow-sm">
+              <div class="flex items-center space-x-3">
+                <div class="p-2 rounded-lg flex items-center justify-center w-10 h-10 ${colors}">
+                  ${getAccountIconHTML(acc.type, "text-xl")}
+                </div>
+                <span class="font-medium text-gray-800">${acc.name}</span>
+              </div>
+              <span class="font-semibold ${stat.balance < 0 ? 'text-red-500' : 'text-gray-900'}">${formatCurrency(stat.balance)}</span>
+            </div>`;
+        }
+        accListHome.innerHTML += html;
+      });
+
+      // 3. 設定画面のアカウント一覧描画
+      const accListSettings = document.getElementById('account-list-settings');
+      accListSettings.innerHTML = '';
+      state.accounts.forEach(acc => {
+        let colors = 'bg-gray-100 text-gray-600';
+        if(acc.type === 'wallet') colors = 'bg-orange-100 text-orange-600';
+        if(acc.type === 'creditCard') colors = 'bg-blue-100 text-blue-600';
+        if(acc.type === 'bank') colors = 'bg-emerald-100 text-emerald-600';
+
+        const amountText = acc.type === 'creditCard' 
+          ? `上限額: ${formatCurrency(acc.limitAmount)}` 
+          : `初期残高: ${formatCurrency(acc.initialBalance)}`;
+
+        accListSettings.innerHTML += `
+          <div class="bg-white p-4 rounded-xl flex items-center justify-between border border-gray-100 shadow-sm">
+            <div class="flex items-center space-x-3">
+              <div class="p-2 rounded-lg flex items-center justify-center w-10 h-10 ${colors}">
+                ${getAccountIconHTML(acc.type, "text-xl")}
+              </div>
+              <div>
+                <div class="font-medium text-gray-800">${acc.name}</div>
+                <div class="text-xs text-gray-400 mt-0.5">${amountText}</div>
+              </div>
+            </div>
+            <button onclick='openAccountModal(${JSON.stringify(acc)})' class="p-2 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors">
+              <i class="ph ph-pencil-simple text-xl"></i>
+            </button>
+          </div>`;
+      });
+
+      // 4. トランザクション描画
+      const sortedTxs = [...state.transactions].sort((a, b) => new Date(b.date) - new Date(a.date));
+      
+      const renderTx = (tx) => {
+        const isIncome = tx.type === 'income';
+        const catList = isIncome ? CATEGORIES.income : CATEGORIES.expense;
+        const cat = catList.find(c => c.id === tx.categoryId) || { icon: '📝', name: '未分類' };
+        const accName = accountStats[tx.accountId]?.name || '不明';
+        const d = new Date(tx.date);
+        const dateStr = `${d.getMonth() + 1}/${d.getDate()}`;
+        
+        return `
+          <div class="p-4 flex items-center justify-between">
+            <div class="flex items-center space-x-4 min-w-0">
+              <div class="text-2xl bg-gray-50 w-12 h-12 rounded-full flex items-center justify-center shrink-0">${cat.icon}</div>
+              <div class="min-w-0">
+                <p class="font-medium text-gray-800 leading-tight truncate">${cat.name}</p>
+                <div class="flex items-center text-xs text-gray-500 mt-1 space-x-2">
+                  <span>${dateStr}</span>
+                  <span class="w-1 h-1 bg-gray-300 rounded-full"></span>
+                  <span class="truncate">${accName}</span>
+                </div>
+                ${tx.note ? `<p class="text-xs text-gray-400 mt-1 truncate">${tx.note}</p>` : ''}
+              </div>
+            </div>
+            <div class="font-semibold shrink-0 ml-2 ${isIncome ? 'text-emerald-600' : 'text-gray-800'}">
+              ${isIncome ? '+' : '-'}${formatCurrency(tx.amount)}
+            </div>
+          </div>`;
+      };
+
+      const noDataHTML = `<div class="p-6 text-center text-gray-400 text-sm">記録がありません。</div>`;
+      
+      document.getElementById('recent-transactions').innerHTML = sortedTxs.length ? sortedTxs.slice(0, 5).map(renderTx).join('') : noDataHTML;
+      document.getElementById('all-transactions').innerHTML = sortedTxs.length ? sortedTxs.map(renderTx).join('') : noDataHTML;
+
+      // 5. モーダルのセレクトボックス更新
+      const accSelect = document.getElementById('tx-account');
+      accSelect.innerHTML = state.accounts.map(acc => `<option value="${acc.id}">${acc.name}</option>`).join('');
+    }
+
+    // --- タブ切り替え ---
+    function switchTab(tabId) {
+      state.currentTab = tabId;
+      
+      ['home', 'history', 'settings'].forEach(id => {
+        document.getElementById(`tab-${id}`).classList.toggle('hidden', id !== tabId);
+        document.getElementById(`tab-${id}`).classList.toggle('block', id === tabId);
+        
+        const navBtn = document.getElementById(`nav-${id}`);
+        if(id === tabId) {
+          navBtn.classList.replace('text-gray-500', 'text-indigo-600');
+          navBtn.classList.replace('hover:text-gray-800', 'text-indigo-600');
+          navBtn.querySelector('i').classList.replace('ph', 'ph-fill');
+        } else {
+          navBtn.classList.replace('text-indigo-600', 'text-gray-500');
+          navBtn.classList.add('hover:text-gray-800');
+          navBtn.querySelector('i').classList.replace('ph-fill', 'ph');
+        }
+      });
+
+      // ヘッダーテキストとFAB表示
+      const titles = { home: 'ホーム', history: '履歴', settings: 'アカウント管理' };
+      document.getElementById('header-title').innerText = titles[tabId];
+      document.getElementById('header-balance-container').style.display = tabId === 'home' ? 'block' : 'none';
+      document.getElementById('fab-button').style.display = tabId === 'settings' ? 'none' : 'block';
+    }
+
+    // --- 取引追加モーダル制御 ---
+    function openTxModal() {
+      if(state.accounts.length === 0) {
+        alert("先にアカウント（財布やカード）を登録してください。");
+        switchTab('settings');
+        return;
+      }
+      setTxType('expense'); // デフォルト支出
+      document.getElementById('tx-amount').value = '';
+      document.getElementById('tx-note').value = '';
+      document.getElementById('tx-modal').classList.remove('hidden');
+    }
+
+    function closeTxModal() {
+      document.getElementById('tx-modal').classList.add('hidden');
+    }
+
+    function setTxType(type) {
+      state.txForm.type = type;
+      state.txForm.categoryId = CATEGORIES[type][0].id;
+      
+      const expBtn = document.getElementById('tx-type-expense');
+      const incBtn = document.getElementById('tx-type-income');
+      
+      if(type === 'expense') {
+        expBtn.className = "flex-1 py-2 text-sm font-medium rounded-lg flex items-center justify-center space-x-1 bg-white text-red-600 shadow-sm transition-all z-10";
+        expBtn.querySelector('i').classList.replace('ph', 'ph-fill');
+        incBtn.className = "flex-1 py-2 text-sm font-medium rounded-lg flex items-center justify-center space-x-1 text-gray-500 hover:text-gray-700 transition-all z-10";
+        incBtn.querySelector('i').classList.replace('ph-fill', 'ph');
+      } else {
+        incBtn.className = "flex-1 py-2 text-sm font-medium rounded-lg flex items-center justify-center space-x-1 bg-white text-emerald-600 shadow-sm transition-all z-10";
+        incBtn.querySelector('i').classList.replace('ph', 'ph-fill');
+        expBtn.className = "flex-1 py-2 text-sm font-medium rounded-lg flex items-center justify-center space-x-1 text-gray-500 hover:text-gray-700 transition-all z-10";
+        expBtn.querySelector('i').classList.replace('ph-fill', 'ph');
+      }
+      renderTxCategories();
+    }
+
+    function renderTxCategories() {
+      const container = document.getElementById('tx-categories');
+      const cats = CATEGORIES[state.txForm.type];
+      const color = state.txForm.type === 'expense' ? 'red' : 'emerald';
+      
+      container.innerHTML = cats.map(cat => {
+        const isSelected = state.txForm.categoryId === cat.id;
+        const classes = isSelected 
+          ? `border-${color}-500 bg-${color}-50` 
+          : `border-gray-200 bg-white`;
+        return `
+          <button type="button" onclick="setTxCategory('${cat.id}')" class="flex flex-col items-center justify-center p-3 rounded-xl border transition-all ${classes}">
+            <span class="text-2xl mb-1">${cat.icon}</span>
+            <span class="text-[10px] font-medium text-gray-600">${cat.name}</span>
+          </button>`;
+      }).join('');
+    }
+
+    function setTxCategory(id) {
+      state.txForm.categoryId = id;
+      renderTxCategories();
+    }
+
+    function saveTransaction(e) {
+      e.preventDefault();
+      const amountStr = document.getElementById('tx-amount').value;
+      if(!amountStr) return;
+      
+      const newTx = {
+        id: Date.now().toString(),
+        type: state.txForm.type,
+        amount: parseInt(amountStr, 10),
+        accountId: document.getElementById('tx-account').value,
+        categoryId: state.txForm.categoryId,
+        date: document.getElementById('tx-date').value,
+        note: document.getElementById('tx-note').value
+      };
+      
+      state.transactions.unshift(newTx); // 先頭に追加
+      renderApp();
+      closeTxModal();
+    }
+
+    // --- アカウント追加・編集モーダル制御 ---
+    function openAccountModal(acc = null) {
+      const isEdit = !!acc;
+      document.getElementById('acc-modal-title').innerText = isEdit ? 'アカウントを編集' : 'アカウントを追加';
+      document.getElementById('acc-submit-btn').innerText = isEdit ? '更新する' : '追加する';
+      
+      document.getElementById('acc-id').value = isEdit ? acc.id : '';
+      document.getElementById('acc-name').value = isEdit ? acc.name : '';
+      
+      setAccType(isEdit ? acc.type : 'wallet');
+      
+      let amount = '';
+      if (isEdit) {
+        amount = acc.type === 'creditCard' ? acc.limitAmount : acc.initialBalance;
+      }
+      document.getElementById('acc-amount').value = amount;
+      
+      document.getElementById('acc-modal').classList.remove('hidden');
+    }
+
+    function closeAccountModal() {
+      document.getElementById('acc-modal').classList.add('hidden');
+    }
+
+    function setAccType(type) {
+      state.accForm.type = type;
+      
+      const types = [
+        { id: 'wallet', color: 'orange' },
+        { id: 'creditCard', color: 'blue' },
+        { id: 'bank', color: 'emerald' }
+      ];
+
+      types.forEach(t => {
+        const btn = document.getElementById(`acc-type-${t.id}`);
+        if(t.id === type) {
+          btn.className = `flex flex-col items-center justify-center p-3 rounded-xl border transition-all border-${t.color}-500 bg-${t.color}-50 text-${t.color}-600`;
+          btn.querySelector('i').classList.replace('ph', 'ph-fill');
+        } else {
+          btn.className = `flex flex-col items-center justify-center p-3 rounded-xl border transition-all border-gray-200 bg-white text-gray-500`;
+          btn.querySelector('i').classList.replace('ph-fill', 'ph');
+        }
+      });
+
+      // ラベル等の切り替え
+      document.getElementById('acc-amount-label').innerText = type === 'creditCard' ? '毎月の上限額（利用枠）' : '現在の残高（初期残高）';
+      document.getElementById('acc-name').placeholder = type === 'creditCard' ? '例: 楽天カード' : '例: サブのお財布';
+      if(type === 'creditCard') {
+        document.getElementById('acc-amount-note').classList.remove('hidden');
+      } else {
+        document.getElementById('acc-amount-note').classList.add('hidden');
+      }
+    }
+
+    function saveAccount(e) {
+      e.preventDefault();
+      const name = document.getElementById('acc-name').value.trim();
+      if(!name) return;
+
+      const amountStr = document.getElementById('acc-amount').value;
+      const parsedAmount = amountStr ? parseInt(amountStr, 10) : 0;
+      const type = state.accForm.type;
+      const id = document.getElementById('acc-id').value;
+
+      const accData = {
+        name,
+        type,
+        ...(type === 'creditCard' ? { limitAmount: parsedAmount } : { initialBalance: parsedAmount })
+      };
+
+      if (id) {
+        // 編集
+        state.accounts = state.accounts.map(a => a.id === id ? { ...a, ...accData } : a);
+      } else {
+        // 新規追加
+        accData.id = Date.now().toString();
+        state.accounts.push(accData);
+      }
+
+      renderApp();
+      closeAccountModal();
+    }
+
+    // 起動
+    window.onload = init;
+
+  </script>
+</body>
+</html>
